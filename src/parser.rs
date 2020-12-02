@@ -46,6 +46,19 @@ impl<'a, I, O> Parser<'a, I, O> {
 		})
 	}
 
+	/// Convert parser result to desired value. Matched slice is also delivered.
+	pub fn map_collect<U, F>(self, f: F) -> Parser<'a, I, U>
+	where
+		F: Fn(O, &'a [I]) -> U + 'a,
+		I: 'a,
+		O: 'a,
+		U: 'a,
+	{
+		Parser::new(move |input: &'a [I], start: usize| {
+			(self.method)(input, start).map(|(out, end)| (f(out, &input[start..end]), end))
+		})
+	}
+
 	/// Convert parser result to desired value, fail in case of conversion error.
 	pub fn convert<U, E, F>(self, f: F) -> Parser<'a, I, U>
 	where
