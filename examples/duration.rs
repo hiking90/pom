@@ -1,7 +1,10 @@
+use core::cell::RefCell;
+use std::rc::Rc;
 use pom::parser::*;
 use pom::Parser;
+use std::any::Any;
 
-use std::str::{self, FromStr};
+use std::str::FromStr;
 
 #[derive(Debug, PartialEq)]
 struct Duration {
@@ -14,22 +17,39 @@ struct Duration {
 	seconds: Option<f32>,
 }
 
-fn number_separator() -> Parser<u8, ()> {
+fn number_separator() -> Parser<'static, u8, ()> {
 	// either '.' or ',' can be used as a separator between the whole and decimal part of a number
 	one_of(b".,").discard()
 }
 
-fn number() -> Parser<u8, f32> {
+fn number() -> Parser<'static, u8, f32> {
 	let integer = one_of(b"0123456789").repeat(0..);
 	let frac = number_separator() + one_of(b"0123456789").repeat(1..);
 	let number = integer + frac.opt();
 	number
 		.collect()
-		.convert(str::from_utf8)
-		.convert(f32::from_str)
+		.convert(String::from_utf8)
+		.convert(|v| f32::from_str(&v))
+		.map_input(|v, input| {
+			match input.as_any().downcast_ref::<MyInput>() {
+				Some(my_input) => {
+					// println!("my_input");
+					*my_input.data.borrow_mut() += 1;
+				}
+				None => println!("Unknown type"),
+
+			}
+			// let value_any = &input as &dyn Any;
+
+			// match value_any.downcast_ref::<Rc<MyInput>>() {
+			// 	Some(my_input) => *my_input.data.borrow_mut() += 1,
+			// 	None => println!("Unknow type"),
+			// }
+			v
+		})
 }
 
-fn date_part() -> Parser<u8, (Option<f32>, Option<f32>, Option<f32>, Option<f32>)> {
+fn date_part() -> Parser<'static, u8, (Option<f32>, Option<f32>, Option<f32>, Option<f32>)> {
 	((number() - sym(b'Y')).opt()
 		+ (number() - sym(b'M')).opt()
 		+ (number() - sym(b'W')).opt()
@@ -37,7 +57,7 @@ fn date_part() -> Parser<u8, (Option<f32>, Option<f32>, Option<f32>, Option<f32>
 	.map(|(((years, months), weeks), days)| (years, months, weeks, days))
 }
 
-fn time_part() -> Parser<u8, (Option<f32>, Option<f32>, Option<f32>)> {
+fn time_part() -> Parser<'static, u8, (Option<f32>, Option<f32>, Option<f32>)> {
 	sym(b'T')
 		* ((number() - sym(b'H')).opt()
 			+ (number() - sym(b'M')).opt()
@@ -45,7 +65,7 @@ fn time_part() -> Parser<u8, (Option<f32>, Option<f32>, Option<f32>)> {
 		.map(|((hours, minutes), seconds)| (hours, minutes, seconds))
 }
 
-fn parser() -> Parser<u8, Duration> {
+fn parser() -> Parser<'static, u8, Duration> {
 	sym(b'P')
 		* (time_part().map(|(hours, minutes, seconds)| Duration {
 			years: None,
@@ -70,11 +90,40 @@ fn parser() -> Parser<u8, Duration> {
 		}))
 }
 
+
+pub struct MyInput {
+	pub input: Vec<u8>,
+	pub data: RefCell<u32>,
+}
+
+impl Input<u8> for MyInput {
+	fn get(&self, index: usize) -> Option<&u8> {
+		self.input.get(index)
+	}
+
+	fn get_vec(&self, index: std::ops::Range<usize>) -> Option<Vec<u8>> {
+		Some(self.input.get(index)?.to_vec())
+	}
+
+	fn len(&self) -> usize {
+		self.input.len()
+	}
+
+	fn as_any(&self) -> &dyn Any {
+		self
+	}
+}
+
+
 /// Parses the ISO 8601 Duration standard
 /// https://en.wikipedia.org/wiki/ISO_8601#Durations
 fn main() {
+	let p = parser();
 	let input = "P3Y6M4DT12H30M5S";
-	let result = parser().parse(input.as_bytes());
+	let my_input = Rc::new(MyInput { input: input.as_bytes().to_vec(), data: RefCell::new(0) });
+	let result = p.parse(my_input.clone());
+
+	println!("{:?}", my_input.data);
 
 	assert_eq!(
 		Duration {

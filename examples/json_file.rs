@@ -1,9 +1,11 @@
+use pom::parser::InputV;
+use std::rc::Rc;
 use pom::char_class::hex_digit;
 use pom::parser::{Parser, one_of, sym, none_of, seq, is_a, list, call, end};
 
 use std::char::{decode_utf16, REPLACEMENT_CHARACTER};
 use std::collections::HashMap;
-use std::str::{self, FromStr};
+use std::str::FromStr;
 use std::fs::File;
 use std::io::Read;
 
@@ -26,8 +28,10 @@ fn number<'a>() -> Parser<'a, u8, f64> {
 	let frac = sym(b'.') + one_of(b"0123456789").repeat(1..);
 	let exp = one_of(b"eE") + one_of(b"+-").opt() + one_of(b"0123456789").repeat(1..);
 	let number = sym(b'-').opt() + integer + frac.opt() + exp.opt();
-	number.collect().convert(str::from_utf8).convert(f64::from_str)
-}
+    number
+        .collect()
+		.convert(String::from_utf8)
+        .convert(|v| f64::from_str(&v))}
 
 fn string<'a>() -> Parser<'a, u8, String> {
 	let special_char = sym(b'\\') | sym(b'/') | sym(b'"')
@@ -73,5 +77,5 @@ fn main() {
 	let mut file = File::open("examples/test.json").unwrap();
 	let mut input:Vec<u8> = Vec::new();
 	file.read_to_end(&mut input);
-	println!("{:?}", json().parse(input.as_slice()));
+	println!("{:?}", json().parse(Rc::new(InputV { input: input })));
 }

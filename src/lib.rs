@@ -11,4 +11,4 @@ pub mod char_class;
 pub use crate::result::{Error, Result};
 
 /// Parser type, `Parser<I, O>` is alias of `parser::Parser<'static, I, O>`.
-pub type Parser<I, O> = parser::Parser<'static, I, O>;
+pub type Parser<'a, I, O> = parser::Parser<'a, I, O>;
