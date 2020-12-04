@@ -1,8 +1,6 @@
-use core::cell::RefCell;
 use std::rc::Rc;
 use pom::parser::*;
 use pom::Parser;
-use std::any::Any;
 
 use std::str::FromStr;
 
@@ -30,23 +28,6 @@ fn number() -> Parser<'static, u8, f32> {
 		.collect()
 		.convert(String::from_utf8)
 		.convert(|v| f32::from_str(&v))
-		.map_input(|v, input| {
-			match input.as_any().downcast_ref::<MyInput>() {
-				Some(my_input) => {
-					// println!("my_input");
-					*my_input.data.borrow_mut() += 1;
-				}
-				None => println!("Unknown type"),
-
-			}
-			// let value_any = &input as &dyn Any;
-
-			// match value_any.downcast_ref::<Rc<MyInput>>() {
-			// 	Some(my_input) => *my_input.data.borrow_mut() += 1,
-			// 	None => println!("Unknow type"),
-			// }
-			v
-		})
 }
 
 fn date_part() -> Parser<'static, u8, (Option<f32>, Option<f32>, Option<f32>, Option<f32>)> {
@@ -90,40 +71,13 @@ fn parser() -> Parser<'static, u8, Duration> {
 		}))
 }
 
-
-pub struct MyInput {
-	pub input: Vec<u8>,
-	pub data: RefCell<u32>,
-}
-
-impl Input<u8> for MyInput {
-	fn get(&self, index: usize) -> Option<&u8> {
-		self.input.get(index)
-	}
-
-	fn get_vec(&self, index: std::ops::Range<usize>) -> Option<Vec<u8>> {
-		Some(self.input.get(index)?.to_vec())
-	}
-
-	fn len(&self) -> usize {
-		self.input.len()
-	}
-
-	fn as_any(&self) -> &dyn Any {
-		self
-	}
-}
-
-
 /// Parses the ISO 8601 Duration standard
 /// https://en.wikipedia.org/wiki/ISO_8601#Durations
 fn main() {
 	let p = parser();
 	let input = "P3Y6M4DT12H30M5S";
-	let my_input = Rc::new(MyInput { input: input.as_bytes().to_vec(), data: RefCell::new(0) });
+	let my_input = Rc::new(InputV { input: input.as_bytes().to_vec() });
 	let result = p.parse(my_input.clone());
-
-	println!("{:?}", my_input.data);
 
 	assert_eq!(
 		Duration {

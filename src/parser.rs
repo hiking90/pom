@@ -14,11 +14,6 @@ pub trait Input<T: Sized> {
 	fn as_any(&self) -> &dyn Any;
 }
 
-#[derive(Clone, Debug)]
-pub struct InputT<'a, T: Sized> {
-	pub input: &'a [T],
-}
-
 pub struct InputV<T: Sized> {
 	pub input: Vec<T>,
 }
@@ -90,18 +85,6 @@ impl<'a, I, O> Parser<'a, I, O> {
 	{
 		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
 			(self.method)(input.clone(), start).map(|(out, end)| (f(out, input.get_vec(start..end).unwrap()), end))
-		})
-	}
-
-	/// Convert parser result to desired value. Matched slice is also delivered.
-	pub fn map_input<U, F>(self, f: F) -> Parser<'a, I, U>
-	where
-		F: Fn(O, Rc<dyn Input<I>>) -> U + 'a,
-		O: 'a,
-		I: 'a,
-	{
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
-			(self.method)(input.clone(), start).map(|(out, end)| (f(out, input), end))
 		})
 	}
 
