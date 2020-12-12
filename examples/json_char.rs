@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 use pom::parser::*;
 
 use std::char::{decode_utf16, REPLACEMENT_CHARACTER};
@@ -104,5 +104,5 @@ fn main() {
     }"#;
 
 	let input: Vec<char> = test.chars().collect();
-	println!("{:?}", json().parse(Rc::new(InputV { input: input })));
+	println!("{:?}", json().parse(Arc::new(InputV { input: input })));
 }

@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 use pom::parser::*;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -70,7 +70,7 @@ fn container<'a>() -> Parser<'a, u8, Container> {
 			).collect()
 		)
 	).map(|deden| {
-		subcontainer().parse(Rc::new(InputV { input: deden })).expect("subcont")
+		subcontainer().parse(Arc::new(InputV { input: deden })).expect("subcont")
 	}).map(|(containers, contents)| Container { containers, contents })
 }
 
@@ -109,7 +109,7 @@ Container
 		"#;
 
 	assert_eq!(
-		mylang().parse(Rc::new(InputV { input: input.to_vec() })),
+		mylang().parse(Arc::new(InputV { input: input.to_vec() })),
 		Ok(
 			vec![
 				Container {

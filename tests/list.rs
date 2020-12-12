@@ -1,6 +1,6 @@
 extern crate pom;
 
-use std::rc::Rc;
+use std::sync::Arc;
 use pom::parser::*;
 use pom::Parser;
 
@@ -19,11 +19,11 @@ fn dangle() -> Parser<'static, u8, (Vec<u8>, &'static [u8])> {
 #[test]
 fn test_list() {
 	let one = b"a and b and c";
-	assert_eq!(works().parse(Rc::new(InputV { input: one.to_vec() })), Ok(vec![b'a', b'b', b'c']));
+	assert_eq!(works().parse(Arc::new(InputV { input: one.to_vec() })), Ok(vec![b'a', b'b', b'c']));
 
 	let two = b"a and b and c and ";
 	assert_eq!(
-		dangle().parse(Rc::new(InputV { input: two.to_vec() })),
+		dangle().parse(Arc::new(InputV { input: two.to_vec() })),
 		Ok((vec![b'a', b'b', b'c'], &b" and"[..]))
 	);
 }

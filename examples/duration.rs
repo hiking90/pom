@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 use pom::parser::*;
 use pom::Parser;
 
@@ -76,7 +76,7 @@ fn parser() -> Parser<'static, u8, Duration> {
 fn main() {
 	let p = parser();
 	let input = "P3Y6M4DT12H30M5S";
-	let my_input = Rc::new(InputV { input: input.as_bytes().to_vec() });
+	let my_input = Arc::new(InputV { input: input.as_bytes().to_vec() });
 	let result = p.parse(my_input.clone());
 
 	assert_eq!(

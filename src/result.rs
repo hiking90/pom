@@ -5,6 +5,11 @@ use std::fmt::{self, Display};
 #[derive(Debug, PartialEq, Clone)]
 pub enum Error {
 	Incomplete,
+	Repeat {
+		message: String,
+		position: usize,
+		inner: Option<Box<Error>>,
+	},
 	Mismatch {
 		message: String,
 		position: usize,
@@ -35,6 +40,16 @@ impl Display for Error {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match self {
 			Error::Incomplete => write!(f, "Incomplete"),
+			Error::Repeat {
+				ref message,
+				ref position,
+				inner: Some(ref inner),
+			} => write!(f, "Repeat at {}: {}, (inner: {})", position, message, inner),
+			Error::Repeat {
+				ref message,
+				ref position,
+				inner: None,
+			} => write!(f, "Repeat at {}: {}, (inner: None)", position, message),
 			Error::Mismatch {
 				ref message,
 				ref position,

@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 use pom::char_class::hex_digit;
 use pom::parser::*;
 
@@ -89,5 +89,5 @@ fn main() {
         "escaped characters": "\u2192\uD83D\uDE00\"\t\uD834\uDD1E"
     }"#;
 
-	println!("{:?}", json().parse(Rc::new(InputV { input: input.to_vec() })));
+	println!("{:?}", json().parse(Arc::new(InputV { input: input.to_vec() })));
 }

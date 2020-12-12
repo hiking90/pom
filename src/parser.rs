@@ -4,7 +4,7 @@ use crate::range::RangeArgument;
 use crate::set::Set;
 use std::fmt::{Debug, Display};
 use std::ops::{Add, BitOr, Mul, Neg, Not, Shr, Sub, Range};
-use std::rc::Rc;
+use std::sync::Arc;
 use std::any::Any;
 
 pub trait Input<T: Sized> {
@@ -36,18 +36,18 @@ impl<T: Clone + 'static> Input<T> for InputV<T> {
 	}
 }
 
-type Parse<'a, I, O> = dyn Fn(Rc<dyn Input<I>>, usize) -> Result<(O, usize)> + 'a;
+type Parse<'a, I, O> = dyn Fn(Arc<dyn Input<I>>, usize) -> Result<(O, usize)> + 'a + Sync + Send;
 
 /// Parser combinator.
 pub struct Parser<'a, I: Sized, O> {
 	pub method: Box<Parse<'a, I, O>>,
 }
 
-impl<'a, I, O> Parser<'a, I, O> {
+impl<'a, I: Send, O: Send> Parser<'a, I, O> {
 	/// Create new parser.
 	pub fn new<P>(parse: P) -> Parser<'a, I, O>
 	where
-		P: Fn(Rc<dyn Input<I>>, usize) -> Result<(O, usize)> + 'a,
+		P: Fn(Arc<dyn Input<I>>, usize) -> Result<(O, usize)> + 'a + Sync + Send,
 	{
 		Parser {
 			method: Box::new(parse),
@@ -55,23 +55,23 @@ impl<'a, I, O> Parser<'a, I, O> {
 	}
 
 	/// Apply the parser to parse input.
-	pub fn parse(&self, input: Rc<dyn Input<I>>) -> Result<O> {
+	pub fn parse(&self, input: Arc<dyn Input<I>>) -> Result<O> {
 		(self.method)(input, 0).map(|(out, _)| out)
 	}
 
 	/// Parse input at specified position.
-	pub fn parse_at(&self, input: Rc<dyn Input<I>>, start: usize) -> Result<(O, usize)> {
+	pub fn parse_at(&self, input: Arc<dyn Input<I>>, start: usize) -> Result<(O, usize)> {
 		(self.method)(input, start)
 	}
 
 	/// Convert parser result to desired value.
 	pub fn map<U, F>(self, f: F) -> Parser<'a, I, U>
 	where
-		F: Fn(O) -> U + 'a,
+		F: Fn(O) -> U + 'a + Sync + Send,
 		I: 'a,
-		O: 'a,
+		O: 'a, U: Send
 	{
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 			(self.method)(input.clone(), start).map(|(out, pos)| (f(out), pos))
 		})
 	}
@@ -79,11 +79,11 @@ impl<'a, I, O> Parser<'a, I, O> {
 	/// Convert parser result to desired value. Matched slice is also delivered.
 	pub fn map_collect<U, F>(self, f: F) -> Parser<'a, I, U>
 	where
-		F: Fn(O, Vec<I>) -> U + 'a,
+		F: Fn(O, Vec<I>) -> U + 'a + Sync + Send,
 		O: 'a,
-		I: 'a,
+		I: 'a, U: Send
 	{
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 			(self.method)(input.clone(), start).map(|(out, end)| (f(out, input.get_vec(start..end).unwrap()), end))
 		})
 	}
@@ -91,12 +91,12 @@ impl<'a, I, O> Parser<'a, I, O> {
 	/// Convert parser result to desired value, fail in case of conversion error.
 	pub fn convert<U, E, F>(self, f: F) -> Parser<'a, I, U>
 	where
-		F: Fn(O) -> ::std::result::Result<U, E> + 'a,
+		F: Fn(O) -> ::std::result::Result<U, E> + 'a + Sync + Send,
 		E: Debug,
 		I: 'a,
-		O: 'a,
+		O: 'a, U: Send
 	{
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 			(self.method)(input.clone(), start).and_then(|(res, pos)| match f(res) {
 				Ok(out) => Ok((out, pos)),
 				Err(err) => Err(Error::Conversion {
@@ -108,23 +108,23 @@ impl<'a, I, O> Parser<'a, I, O> {
 	}
 
 	/// Cache parser output result to speed up backtracking.
-	pub fn cache(self) -> Parser<'a, I, O>
-	where
-		O: Clone + 'a,
-		I: 'a,
-	{
-		use std::cell::RefCell;
-		use std::collections::HashMap;
-		let results = RefCell::new(HashMap::new());
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
-			let key = (start, format!("{:p}", &self.method));
-			results
-				.borrow_mut()
-				.entry(key)
-				.or_insert_with(|| (self.method)(input, start))
-				.clone()
-		})
-	}
+	// pub fn cache(self) -> Parser<'a, I, O>
+	// where
+	// 	O: Clone + 'a,
+	// 	I: 'a,
+	// {
+	// 	use std::cell::RefCell;
+	// 	use std::collections::HashMap;
+	// 	let results = RefCell::new(HashMap::new());
+	// 	Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
+	// 		let key = (start, format!("{:p}", &self.method));
+	// 		results
+	// 			.borrow_mut()
+	// 			.entry(key)
+	// 			.or_insert_with(|| (self.method)(input, start))
+	// 			.clone()
+	// 	})
+	// }
 
 	/// Get input position after matching parser.
 	pub fn pos(self) -> Parser<'a, I, usize>
@@ -132,7 +132,7 @@ impl<'a, I, O> Parser<'a, I, O> {
 		I: 'a,
 		O: 'a,
 	{
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 			(self.method)(input, start).map(|(_, pos)| (pos, pos))
 		})
 	}
@@ -143,7 +143,7 @@ impl<'a, I, O> Parser<'a, I, O> {
 		I: 'a + Clone,
 		O: 'a,
 	{
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 			(self.method)(input.clone(), start).map(move |(_, end)| {
 				(input.get_vec(start..end).unwrap(), end)
 			})
@@ -156,7 +156,7 @@ impl<'a, I, O> Parser<'a, I, O> {
 		I: 'a,
 		O: 'a,
 	{
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 			(self.method)(input, start).map(|(_, end)| ((), end))
 		})
 	}
@@ -168,7 +168,7 @@ impl<'a, I, O> Parser<'a, I, O> {
 		O: 'a,
 	{
 		Parser::new(
-			move |input: Rc<dyn Input<I>>, start: usize| match (self.method)(input, start) {
+			move |input: Arc<dyn Input<I>>, start: usize| match (self.method)(input, start) {
 				Ok((out, pos)) => Ok((Some(out), pos)),
 				Err(_) => Ok((None, start)),
 			},
@@ -181,13 +181,14 @@ impl<'a, I, O> Parser<'a, I, O> {
 	/// `p.repeat(1..4)` match p at least 1 and at most 3 times
 	pub fn repeat<R>(self, range: R) -> Parser<'a, I, Vec<O>>
 	where
-		R: RangeArgument<usize> + Debug + 'a,
+		R: RangeArgument<usize> + Debug + 'a + Sync + Send,
 		O: 'a,
 		I: 'a,
 	{
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 			let mut items = vec![];
 			let mut pos = start;
+			let mut err = None;
 			loop {
 				match range.end() {
 					Included(&max_count) => {
@@ -203,22 +204,30 @@ impl<'a, I, O> Parser<'a, I, O> {
 					Unbounded => (),
 				}
 
-				if let Ok((item, item_pos)) = (self.method)(input.clone(), pos) {
-					items.push(item);
-					pos = item_pos;
-				} else {
-					break;
+				match (self.method)(input.clone(), pos) {
+					Ok((item, item_pos)) => {
+						items.push(item);
+						pos = item_pos;
+					}
+					Err(e) => {
+						match e {
+							Error::Expect { .. } => return Err(e),
+							_ => err = Some(e),
+						}
+						break;
+					}
 				}
 			}
 			if let Included(&min_count) = range.start() {
 				if items.len() < min_count {
-					return Err(Error::Mismatch {
+					return Err(Error::Repeat {
 						message: format!(
 							"expect repeat at least {} times, found {} times",
 							min_count,
 							items.len()
 						),
 						position: start,
+						inner: if let Some(err) = err { Some(Box::new(err)) } else { None },
 					});
 				}
 			}
@@ -233,7 +242,15 @@ impl<'a, I, O> Parser<'a, I, O> {
 		I: 'a,
 	{
 		Parser::new(
-			move |input: Rc<dyn Input<I>>, start: usize| match (self.method)(input, start) {
+			// move |input: Arc<dyn Input<I>>, start: usize| match (self.method)(input, start) {
+			// 	res @ Ok(_) => res,
+			// 	Err(err) => {
+			// 		println!("Error in {}: {}", name, start);
+			// 		return Err(err);
+			// 	},
+
+			// }
+			move |input: Arc<dyn Input<I>>, start: usize| match (self.method)(input, start) {
 				res @ Ok(_) => res,
 				Err(err) => match err {
 					Error::Custom { .. } => Err(err),
@@ -254,29 +271,49 @@ impl<'a, I, O> Parser<'a, I, O> {
 		I: 'a,
 	{
 		Parser::new(
-			move |input: Rc<dyn Input<I>>, start: usize| match (self.method)(input, start) {
+			// move |input: Arc<dyn Input<I>>, start: usize| {
+			// 	println!("expect {}", name);
+			// 	match (self.method)(input, start) {
+			// 		res @ Ok(_) => {
+			// 			println!("expect ok");
+			// 			res
+			// 		},
+			// 		Err(err) => {
+			// 			println!("expect error {:?}", err);
+			// 			Err(Error::Expect {
+			// 				message: format!("Expect {}", name),
+			// 				position: start,
+			// 				inner: Box::new(err),
+			// 			})
+			// 		},
+			// 	}
+			// }
+			move |input: Arc<dyn Input<I>>, start: usize| match (self.method)(input, start) {
 				res @ Ok(_) => res,
-				Err(err) => Err(Error::Expect {
-					message: format!("Expect {}", name),
-					position: start,
-					inner: Box::new(err),
-				}),
+				Err(err) => match err {
+					Error::Expect { .. } => Err(err),
+					_ => Err(Error::Expect {
+						message: format!("expected '{}'", name),
+						position: start,
+						inner: Box::new(err),
+					}),
+				},
 			},
 		)
 	}
 }
 
 /// Always succeeds, consume no input.
-pub fn empty<'a, I>() -> Parser<'a, I, ()> {
-	Parser::new(|_: Rc<dyn Input<I>>, start: usize| Ok(((), start)))
+pub fn empty<'a, I: Send>() -> Parser<'a, I, ()> {
+	Parser::new(|_: Arc<dyn Input<I>>, start: usize| Ok(((), start)))
 }
 
 /// Match any symbol.
 pub fn any<'a, I>() -> Parser<'a, I, I>
 where
-	I: Clone,
+	I: Clone + Send,
 {
-	Parser::new(|input: Rc<dyn Input<I>>, start: usize| {
+	Parser::new(|input: Arc<dyn Input<I>>, start: usize| {
 		if let Some(s) = input.get(start) {
 			Ok((s.clone(), start + 1))
 		} else {
@@ -291,9 +328,9 @@ where
 /// Success when current input symbol equals `t`.
 pub fn sym<'a, I: 'a>(t: I) -> Parser<'a, I, I>
 where
-	I: Clone + PartialEq + Display,
+	I: Clone + PartialEq + Display + Send + Sync,
 {
-	Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+	Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 		if let Some(s) = input.get(start) {
 			if t == *s {
 				Ok((s.clone(), start + 1))
@@ -312,9 +349,9 @@ where
 /// Success when sequence of symbols matches current input.
 pub fn seq<'a, I>(tag: &'a [I]) -> Parser<'a, I, &[I]>
 where
-	I: PartialEq + Debug,
+	I: PartialEq + Debug + Send + Sync,
 {
-	Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+	Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 		let mut index = 0;
 		loop {
 			let pos = start + index;
@@ -338,7 +375,7 @@ where
 
 /// Success when tag matches current input.
 pub fn tag(tag: &str) -> Parser<char, &str> {
-	Parser::new(move |input: Rc<dyn Input<char>>, start: usize| {
+	Parser::new(move |input: Arc<dyn Input<char>>, start: usize| {
 		let mut pos = start;
 		for c in tag.chars() {
 			if let Some(&s) = input.get(pos) {
@@ -358,12 +395,12 @@ pub fn tag(tag: &str) -> Parser<char, &str> {
 }
 
 /// Parse separated list.
-pub fn list<'a, I: 'a, O: 'a, U: 'a>(
+pub fn list<'a, I: 'a + Send, O: 'a + Send, U: 'a>(
 	parser: Parser<'a, I, O>,
 	separator: Parser<'a, I, U>,
 ) -> Parser<'a, I, Vec<O>>
 {
-	Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+	Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 		let mut items = vec![];
 		let mut pos = start;
 		if let Ok((first_item, first_pos)) = (parser.method)(input.clone(), pos) {
@@ -386,10 +423,10 @@ pub fn list<'a, I: 'a, O: 'a, U: 'a>(
 /// Success when current input symbol is one of the set.
 pub fn one_of<'a, I, S>(set: &'a S) -> Parser<'a, I, I>
 where
-	I: Clone + PartialEq + Display + Debug,
-	S: Set<I> + ?Sized,
+	I: Clone + PartialEq + Display + Debug + Send,
+	S: Set<I> + ?Sized + Sync,
 {
-	Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+	Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 		if let Some(s) = input.get(start) {
 			if set.contains(s) {
 				Ok((s.clone(), start + 1))
@@ -408,10 +445,10 @@ where
 /// Success when current input symbol is none of the set.
 pub fn none_of<'a, I, S>(set: &'static S) -> Parser<'a, I, I>
 where
-	I: Clone + PartialEq + Display + Debug,
-	S: Set<I> + ?Sized,
+	I: Clone + PartialEq + Display + Debug + Send,
+	S: Set<I> + ?Sized + Sync,
 {
-	Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+	Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 		if let Some(s) = input.get(start) {
 			if set.contains(s) {
 				Err(Error::Mismatch {
@@ -430,10 +467,10 @@ where
 /// Success when predicate returns true on current input symbol.
 pub fn is_a<'a, I, F: 'a>(predicate: F) -> Parser<'a, I, I>
 where
-	I: Clone + PartialEq + Display + Debug,
-	F: Fn(I) -> bool,
+	I: Clone + PartialEq + Display + Debug + Send,
+	F: Fn(I) -> bool + Sync + Send,
 {
-	Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+	Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 		if let Some(s) = input.get(start) {
 			if predicate(s.clone()) {
 				Ok((s.clone(), start + 1))
@@ -452,10 +489,10 @@ where
 /// Success when predicate returns false on current input symbol.
 pub fn not_a<'a, I, F: 'a>(predicate: F) -> Parser<'a, I, I>
 where
-	I: Clone + PartialEq + Display + Debug,
-	F: Fn(I) -> bool,
+	I: Clone + PartialEq + Display + Debug + Send,
+	F: Fn(I) -> bool + Sync + Send,
 {
-	Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+	Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 		if let Some(s) = input.get(start) {
 			if predicate(s.clone()) {
 				Err(Error::Mismatch {
@@ -472,8 +509,8 @@ where
 }
 
 /// Read n symbols.
-pub fn take<'a, I: Clone>(n: usize) -> Parser<'a, I, Vec<I>> {
-	Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+pub fn take<'a, I: Clone + Send>(n: usize) -> Parser<'a, I, Vec<I>> {
+	Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 		let pos = start + n;
 		if input.len() >= pos {
 			Ok((input.get_vec(start..pos).unwrap(), pos))
@@ -484,8 +521,8 @@ pub fn take<'a, I: Clone>(n: usize) -> Parser<'a, I, Vec<I>> {
 }
 
 /// Skip n symbols.
-pub fn skip<'a, I>(n: usize) -> Parser<'a, I, ()> {
-	Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+pub fn skip<'a, I: Send>(n: usize) -> Parser<'a, I, ()> {
+	Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 		let pos = start + n;
 		if input.len() >= pos {
 			Ok(((), pos))
@@ -498,9 +535,9 @@ pub fn skip<'a, I>(n: usize) -> Parser<'a, I, ()> {
 /// Call a parser factory, can be used to create recursive parsers.
 pub fn call<'a, I, O, F: 'a>(parser_factory: F) -> Parser<'a, I, O>
 where
-	F: Fn() -> Parser<'a, I, O>,
+	F: Fn() -> Parser<'a, I, O> + Sync + Send, I: Send, O: Send
 {
-	Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+	Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 		let parser = parser_factory();
 		(parser.method)(input, start)
 	})
@@ -509,9 +546,9 @@ where
 /// Success when end of input is reached.
 pub fn end<'a, I>() -> Parser<'a, I, ()>
 where
-	I: Display,
+	I: Display + Send,
 {
-	Parser::new(|input: Rc<dyn Input<I>>, start: usize| {
+	Parser::new(|input: Arc<dyn Input<I>>, start: usize| {
 		if let Some(s) = input.get(start) {
 			Err(Error::Mismatch {
 				message: format!("expect end of input, found: {}", s),
@@ -524,11 +561,11 @@ where
 }
 
 /// Sequence reserve value
-impl<'a, I: 'a, O: 'a, U: 'a> Add<Parser<'a, I, U>> for Parser<'a, I, O> {
+impl<'a, I: 'a + Send, O: 'a + Send, U: 'a + Send> Add<Parser<'a, I, U>> for Parser<'a, I, O> {
 	type Output = Parser<'a, I, (O, U)>;
 
 	fn add(self, other: Parser<'a, I, U>) -> Self::Output {
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 			(self.method)(input.clone(), start).and_then(|(out1, pos1)| {
 				(other.method)(input.clone(), pos1).map(|(out2, pos2)| ((out1, out2), pos2))
 			})
@@ -537,11 +574,11 @@ impl<'a, I: 'a, O: 'a, U: 'a> Add<Parser<'a, I, U>> for Parser<'a, I, O> {
 }
 
 /// Sequence discard second value
-impl<'a, I: 'a, O: 'a, U: 'a> Sub<Parser<'a, I, U>> for Parser<'a, I, O> {
+impl<'a, I: 'a + Send, O: 'a + Send, U: 'a> Sub<Parser<'a, I, U>> for Parser<'a, I, O> {
 	type Output = Parser<'a, I, O>;
 
 	fn sub(self, other: Parser<'a, I, U>) -> Self::Output {
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 			(self.method)(input.clone(), start)
 				.and_then(|(out1, pos1)| (other.method)(input.clone(), pos1).map(|(_, pos2)| (out1, pos2)))
 		})
@@ -549,11 +586,11 @@ impl<'a, I: 'a, O: 'a, U: 'a> Sub<Parser<'a, I, U>> for Parser<'a, I, O> {
 }
 
 /// Sequence discard first value
-impl<'a, I: 'a, O: 'a, U: 'a> Mul<Parser<'a, I, U>> for Parser<'a, I, O> {
+impl<'a, I: 'a + Send, O: 'a, U: 'a + Send> Mul<Parser<'a, I, U>> for Parser<'a, I, O> {
 	type Output = Parser<'a, I, U>;
 
 	fn mul(self, other: Parser<'a, I, U>) -> Self::Output {
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 			(self.method)(input.clone(), start)
 				.and_then(|(_, pos1)| (other.method)(input.clone(), pos1).map(|(out2, pos2)| (out2, pos2)))
 		})
@@ -561,23 +598,23 @@ impl<'a, I: 'a, O: 'a, U: 'a> Mul<Parser<'a, I, U>> for Parser<'a, I, O> {
 }
 
 /// Chain two parsers where the second parser depends on the first's result.
-impl<'a, I: 'a, O: 'a, U, F: 'a +  Fn(O) -> Parser<'a, I, U>> Shr<F> for Parser<'a, I, O> {
+impl<'a, I: 'a + Send, O: 'a, U: Send, F: 'a +  Fn(O) -> Parser<'a, I, U> + Sync + Send> Shr<F> for Parser<'a, I, O> {
 	type Output = Parser<'a, I, U>;
 
 	fn shr(self, other: F) -> Self::Output {
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 			(self.method)(input.clone(), start).and_then(|(out, pos)| (other(out).method)(input.clone(), pos))
 		})
 	}
 }
 
 /// Ordered choice
-impl<'a, I: 'a, O: 'a> BitOr for Parser<'a, I, O> {
+impl<'a, I: 'a + Send, O: 'a + Send> BitOr for Parser<'a, I, O> {
 	type Output = Parser<'a, I, O>;
 
 	fn bitor(self, other: Parser<'a, I, O>) -> Self::Output {
 		Parser::new(
-			move |input: Rc<dyn Input<I>>, start: usize| match (self.method)(input.clone(), start) {
+			move |input: Arc<dyn Input<I>>, start: usize| match (self.method)(input.clone(), start) {
 				Ok(out) => Ok(out),
 				Err(err) => match err {
 					Error::Expect { .. } => Err(err),
@@ -589,23 +626,23 @@ impl<'a, I: 'a, O: 'a> BitOr for Parser<'a, I, O> {
 }
 
 /// And predicate
-impl<'a, I: 'a, O: 'a> Neg for Parser<'a, I, O> {
+impl<'a, I: 'a + Send, O: 'a> Neg for Parser<'a, I, O> {
 	type Output = Parser<'a, I, bool>;
 
 	fn neg(self) -> Self::Output {
-		Parser::new(move |input: Rc<dyn Input<I>>, start: usize| {
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
 			(self.method)(input, start).map(|_| (true, start))
 		})
 	}
 }
 
 /// Not predicate
-impl<'a, I: 'a, O: 'a> Not for Parser<'a, I, O> {
+impl<'a, I: 'a + Send, O: 'a> Not for Parser<'a, I, O> {
 	type Output = Parser<'a, I, bool>;
 
 	fn not(self) -> Self::Output {
 		Parser::new(
-			move |input: Rc<dyn Input<I>>, start: usize| match (self.method)(input, start) {
+			move |input: Arc<dyn Input<I>>, start: usize| match (self.method)(input, start) {
 				Ok(_) => Err(Error::Mismatch {
 					message: "not predicate failed".to_string(),
 					position: start,
@@ -625,7 +662,7 @@ mod tests {
 	fn byte_works() {
 		let input = b"abcde";
 		let parser = sym(b'a') + one_of(b"ab") - sym(b'C');
-		let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+		let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 		assert_eq!(
 			output,
 			Err(Error::Mismatch {
@@ -635,12 +672,12 @@ mod tests {
 		);
 
 		let parser = sym(b'a') * none_of(b"AB") - sym(b'c') + seq(b"de");
-		let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+		let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 		assert_eq!(output, Ok((b'b', &b"de"[..])));
-		assert_eq!(parser.pos().parse(Rc::new(InputV { input: input.to_vec() })), Ok(5));
+		assert_eq!(parser.pos().parse(Arc::new(InputV { input: input.to_vec() })), Ok(5));
 
 		let parser = sym(b'e') | sym(b'd').expect("d") | empty().map(|_| b'0');
-		let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+		let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 		assert_eq!(
 			output,
 			Err(Error::Expect {
@@ -658,7 +695,7 @@ mod tests {
 	fn char_works() {
 		let input = "abcd".chars().collect::<Vec<char>>();
 		let parser = tag("ab") + sym('c') | sym('d').map(|_| ("", '0'));
-		let output = parser.parse(Rc::new(InputV { input: input }));
+		let output = parser.parse(Arc::new(InputV { input: input }));
 		assert_eq!(output, Ok(("ab", 'c')));
 	}
 
@@ -675,7 +712,7 @@ mod tests {
 		}
 		let input = b"(())";
 		let parser = expr();
-		let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+		let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 		assert_eq!(
 			output,
 			Ok(Expr::Group(Box::new(Expr::Group(Box::new(Expr::Empty)))))
@@ -688,12 +725,12 @@ mod tests {
 		{
 			let parser = one_of(b"0123456789").map(|c| c - b'0')
 				>> |n| take(n as usize) + sym(b'o').repeat(0..);
-			assert_eq!(parser.parse(Rc::new(InputV { input: input.to_vec() })), Ok((b"ooooo"[..].to_vec(), vec![b'o'; 3])));
+			assert_eq!(parser.parse(Arc::new(InputV { input: input.to_vec() })), Ok((b"ooooo"[..].to_vec(), vec![b'o'; 3])));
 		}
 		{
 			let parser =
 				skip(1) * take(3) >> |v: Vec<u8>| take(v.len() + 2).map(move |u| (u, v.clone()));
-			assert_eq!(parser.parse(Rc::new(InputV { input: input.to_vec() })), Ok((b"ooooo"[..].to_vec(), b"ooo"[..].to_vec())));
+			assert_eq!(parser.parse(Arc::new(InputV { input: input.to_vec() })), Ok((b"ooooo"[..].to_vec(), b"ooo"[..].to_vec())));
 		}
 		{
 			let parser = Parser::new(move |input, start| {
@@ -705,7 +742,7 @@ mod tests {
 							.map(|(u, end)| ((u, v), end))
 					})
 			});
-			assert_eq!(parser.parse(Rc::new(InputV { input: input.to_vec() })), Ok((b"ooooo"[..].to_vec(), b"ooo"[..].to_vec())));
+			assert_eq!(parser.parse(Arc::new(InputV { input: input.to_vec() })), Ok((b"ooooo"[..].to_vec(), b"ooo"[..].to_vec())));
 		}
 	}
 
@@ -715,37 +752,37 @@ mod tests {
 
 		{
 			let parser = sym(b'x').repeat(1..2);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert_eq!(output, Ok(vec![b'x'; 1]))
 		}
 
 		{
 			let parser = sym(b'x').repeat(1..);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert_eq!(output, Ok(vec![b'x'; 3]))
 		}
 
 		{
 			let parser = sym(b'x').repeat(0..);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert_eq!(output, Ok(vec![b'x'; 3]))
 		}
 
 		{
 			let parser = sym(b'y').repeat(0..);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert_eq!(output, Ok(vec![]))
 		}
 
 		{
 			let parser = sym(b'y').repeat(1..);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert!(output.is_err());
 		}
 
 		{
 			let parser = sym(b'x').repeat(10..);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert!(output.is_err());
 		}
 	}
@@ -756,31 +793,31 @@ mod tests {
 
 		{
 			let parser = sym(b'x').repeat(..2);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert_eq!(output, Ok(vec![b'x'; 1]))
 		}
 
 		{
 			let parser = sym(b'x').repeat(..4);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert_eq!(output, Ok(vec![b'x'; 3]))
 		}
 
 		{
 			let parser = sym(b'x').repeat(..);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert_eq!(output, Ok(vec![b'x'; 3]))
 		}
 
 		{
 			let parser = sym(b'x').repeat(..0);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert_eq!(output, Ok(vec![]))
 		}
 
 		{
 			let parser = sym(b'x').repeat(..10);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert_eq!(output, Ok(vec![b'x'; 3]))
 		}
 	}
@@ -791,31 +828,31 @@ mod tests {
 
 		{
 			let parser = sym(b'x').repeat(0);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert_eq!(output, Ok(vec![]))
 		}
 
 		{
 			let parser = sym(b'x').repeat(1);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert_eq!(output, Ok(vec![b'x'; 1]))
 		}
 
 		{
 			let parser = sym(b'x').repeat(2);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert_eq!(output, Ok(vec![b'x'; 2]))
 		}
 
 		{
 			let parser = sym(b'x').repeat(3);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert_eq!(output, Ok(vec![b'x'; 3]))
 		}
 
 		{
 			let parser = sym(b'x').repeat(4);
-			let output = parser.parse(Rc::new(InputV { input: input.to_vec() }));
+			let output = parser.parse(Arc::new(InputV { input: input.to_vec() }));
 			assert!(output.is_err())
 		}
 	}

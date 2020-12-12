@@ -1,5 +1,5 @@
 use pom::parser::InputV;
-use std::rc::Rc;
+use std::sync::Arc;
 use pom::char_class::hex_digit;
 use pom::parser::{Parser, one_of, sym, none_of, seq, is_a, list, call, end};
 
@@ -77,5 +77,5 @@ fn main() {
 	let mut file = File::open("examples/test.json").unwrap();
 	let mut input:Vec<u8> = Vec::new();
 	file.read_to_end(&mut input);
-	println!("{:?}", json().parse(Rc::new(InputV { input: input })));
+	println!("{:?}", json().parse(Arc::new(InputV { input: input })));
 }
