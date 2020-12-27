@@ -137,6 +137,16 @@ impl<'a, I: Send, O: Send> Parser<'a, I, O> {
 		})
 	}
 
+	pub fn range(self) -> Parser<'a, I, (usize, usize)>
+	where
+		I: 'a,
+		O: 'a,
+	{
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
+			(self.method)(input, start).map(|(_, end)| ((start, end), end))
+		})
+	}
+
 	/// Collect all matched input symbols.
 	pub fn collect(self) -> Parser<'a, I, Vec<I>>
 	where
