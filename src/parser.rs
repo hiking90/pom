@@ -88,6 +88,23 @@ impl<'a, I: Send, O: Send> Parser<'a, I, O> {
 		})
 	}
 
+	pub fn custom_parser<U, F>(self, f: F) -> Parser<'a, I, U>
+	where
+		F: Fn(O, Arc<dyn Input<I>>, usize) -> Result<(U, usize)> + 'a + Sync + Send,
+		I: 'a,
+		O: 'a, U: Send
+	{
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
+			(self.method)(input.clone(), start).and_then(|(res, pos)| match f(res, input, pos) {
+				Ok(ok) => Ok(ok),
+				Err(err) => match err {
+					Error::Expect { .. } => Err(err),
+					_ => Err(err),
+				},
+			})
+		})
+	}
+
 	/// Convert parser result to desired value, fail in case of conversion error.
 	pub fn convert<U, E, F>(self, f: F) -> Parser<'a, I, U>
 	where
