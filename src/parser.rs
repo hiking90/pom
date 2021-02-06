@@ -105,6 +105,19 @@ impl<'a, I: Send, O: Send> Parser<'a, I, O> {
 		})
 	}
 
+	pub fn log(self, message: &'a str) -> Parser<'a, I, O>
+	where
+		I: 'a,
+		O: 'a + Debug
+	{
+		Parser::new(move |input: Arc<dyn Input<I>>, start: usize| {
+			(self.method)(input.clone(), start).map(|(out, pos)| {
+				println!("{}: {:?}", message, out);
+				(out, pos)
+			})
+		})
+	}
+
 	/// Convert parser result to desired value, fail in case of conversion error.
 	pub fn convert<U, E, F>(self, f: F) -> Parser<'a, I, U>
 	where
